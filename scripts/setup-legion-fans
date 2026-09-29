@@ -1,0 +1,264 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# ============================================================
+# Lenovo Legion fan preset setup
+#
+# Run with:
+#   sudo bash setup-legion-fans.sh
+#
+# This script:
+#   1. Finds legion_hwmon
+#   2. Backs up the current hardware curve
+#   3. Creates six fan presets
+#   4. Changes ONLY fan PWM values
+#   5. Leaves temperature thresholds/hysteresis untouched
+#   6. Restores your original hardware curve when finished
+# ============================================================
+
+if [[ $EUID -ne 0 ]]; then
+    echo "Run this script as root:"
+    echo "  sudo bash $0"
+    exit 1
+fi
+
+# ------------------------------------------------------------
+# Find LenovoLegionLinux hwmon interface
+# ------------------------------------------------------------
+
+NAME_FILE=$(grep -l '^legion_hwmon$' /sys/class/hwmon/hwmon*/name 2>/dev/null | head -n1 || true)
+
+if [[ -z "$NAME_FILE" ]]; then
+    echo "ERROR: legion_hwmon not found."
+    echo "Check that legion_laptop is loaded:"
+    echo "  lsmod | grep legion"
+    exit 1
+fi
+
+H=$(dirname "$NAME_FILE")
+
+echo "Using hwmon:"
+echo "  $H"
+
+# ------------------------------------------------------------
+# Check supported number of active curve points
+# ------------------------------------------------------------
+
+POINTS=$(cat "$H/auto_points_size")
+
+echo "Active fan-curve points: $POINTS"
+
+if [[ "$POINTS" -ne 9 ]]; then
+    echo "ERROR: Expected 9 fan points, but hardware reports $POINTS."
+    echo "No changes made."
+    exit 1
+fi
+
+# ------------------------------------------------------------
+# Find legion_cli
+# ------------------------------------------------------------
+
+LEGION_CLI=$(command -v legion_cli || true)
+
+if [[ -z "$LEGION_CLI" ]]; then
+    echo "ERROR: legion_cli not found."
+    exit 1
+fi
+
+echo "Using CLI:"
+echo "  $LEGION_CLI"
+
+# ------------------------------------------------------------
+# Backup current fan curve
+# ------------------------------------------------------------
+
+BACKUP="pre-fan-script-backup-$(date +%Y%m%d-%H%M%S)"
+
+echo
+echo "Saving current hardware curve as:"
+echo "  $BACKUP"
+
+"$LEGION_CLI" fancurve-write-hw-to-preset "$BACKUP"
+
+# ------------------------------------------------------------
+# Fan curves
+#
+# Your original Lenovo curve was:
+#
+#   0 40 45 53 58 66 73 89 107
+#
+# PWM range is 0-255.
+#
+# Quiet profiles intentionally preserve points 1-8 exactly.
+# ------------------------------------------------------------
+
+QUIET_BATTERY=(
+    0
+    40
+    45
+    53
+    58
+    66
+    73
+    89
+    170
+)
+
+QUIET_AC=(
+    0
+    40
+    45
+    53
+    58
+    66
+    73
+    130
+    190
+)
+
+BALANCED_BATTERY=(
+    0
+    40
+    45
+    53
+    58
+    66
+    73
+    105
+    190
+)
+
+BALANCED_AC=(
+    0
+    40
+    45
+    53
+    58
+    66
+    78
+    125
+    225
+)
+
+PERFORMANCE_BATTERY=(
+    0
+    40
+    45
+    53
+    58
+    66
+    80
+    135
+    225
+)
+
+PERFORMANCE_AC=(
+    0
+    40
+    45
+    53
+    58
+    70
+    90
+    155
+    255
+)
+
+# ------------------------------------------------------------
+# Function: apply PWM values to both fans, then save preset
+# ------------------------------------------------------------
+
+save_profile() {
+    local preset="$1"
+    shift
+
+    local curve=("$@")
+
+    echo
+    echo "================================================"
+    echo "Creating preset: $preset"
+    echo "================================================"
+
+    for ((i=1; i<=9; i++)); do
+        value="${curve[$((i-1))]}"
+
+        fan1="$H/pwm1_auto_point${i}_pwm"
+        fan2="$H/pwm2_auto_point${i}_pwm"
+
+        if [[ ! -e "$fan1" || ! -e "$fan2" ]]; then
+            echo "ERROR: Missing PWM control for point $i"
+            exit 1
+        fi
+
+        echo "$value" > "$fan1"
+        echo "$value" > "$fan2"
+
+        # Read back actual values accepted by firmware
+        actual1=$(cat "$fan1")
+        actual2=$(cat "$fan2")
+
+        printf "Point %d: requested=%3d  fan1=%3d  fan2=%3d\n" \
+            "$i" "$value" "$actual1" "$actual2"
+    done
+
+    echo "Saving hardware curve -> $preset"
+
+    "$LEGION_CLI" fancurve-write-hw-to-preset "$preset"
+
+    echo "Saved: $preset"
+}
+
+# ------------------------------------------------------------
+# Create presets
+# ------------------------------------------------------------
+
+save_profile "quiet-battery" \
+    "${QUIET_BATTERY[@]}"
+
+save_profile "quiet-ac" \
+    "${QUIET_AC[@]}"
+
+save_profile "balanced-battery" \
+    "${BALANCED_BATTERY[@]}"
+
+save_profile "balanced-ac" \
+    "${BALANCED_AC[@]}"
+
+save_profile "performance-battery" \
+    "${PERFORMANCE_BATTERY[@]}"
+
+save_profile "performance-ac" \
+    "${PERFORMANCE_AC[@]}"
+
+# ------------------------------------------------------------
+# Restore original hardware curve
+#
+# Presets remain saved.
+# ------------------------------------------------------------
+
+echo
+echo "Restoring original hardware curve..."
+
+"$LEGION_CLI" fancurve-write-preset-to-hw "$BACKUP"
+
+echo
+echo "================================================"
+echo "Finished."
+echo "================================================"
+echo
+echo "Created:"
+echo "  quiet-battery"
+echo "  quiet-ac"
+echo "  balanced-battery"
+echo "  balanced-ac"
+echo "  performance-battery"
+echo "  performance-ac"
+echo
+echo "Original curve backup:"
+echo "  $BACKUP"
+echo
+echo "Current hardware curve restored."
+echo
+echo "Check with:"
+echo "  sudo cat /sys/kernel/debug/legion/fancurve"

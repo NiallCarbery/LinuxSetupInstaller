@@ -1,0 +1,234 @@
+#!/usr/bin/env bash
+
+LID_STATE="${XDG_RUNTIME_DIR}/hypr-lid-closed"
+
+SAMSUNG='HDMI-A-1'
+SAMSUNG_DESC='Samsung Electric Company Odyssey G5 HK2X600385'
+LAPTOP='eDP-2'
+
+LAPTOP_60HZ_MODE='modeline 155.235 1920 1968 2000 2200 1080 1083 1089 1176 +hsync -vsync'
+LAPTOP_120HZ_MODE='1920x1080@120'
+
+
+samsung_connected() {
+    hyprctl monitors all 2>/dev/null |
+        grep -Fq "$SAMSUNG_DESC"
+}
+
+
+apply_profile() {
+    PROFILE="$(powerprofilesctl get 2>/dev/null)" || return
+
+    case "$PROFILE" in
+
+        power-saver)
+            SAMSUNG_HZ=59.95
+            LAPTOP_MODE="$LAPTOP_60HZ_MODE"
+
+            GAPS_IN=0
+            GAPS_OUT=0
+            BORDER=1
+            ROUNDING=0
+
+            BLUR=false
+            SHADOW=false
+            ANIMATIONS=false
+            ;;
+
+        balanced)
+            SAMSUNG_HZ=120
+            LAPTOP_MODE="$LAPTOP_60HZ_MODE"
+
+            GAPS_IN=4
+            GAPS_OUT=6
+            BORDER=1
+            ROUNDING=6
+
+            BLUR=false
+            SHADOW=false
+            ANIMATIONS=true
+            ;;
+
+        performance)
+            SAMSUNG_HZ=144
+            LAPTOP_MODE="$LAPTOP_120HZ_MODE"
+
+            GAPS_IN=5
+            GAPS_OUT=10
+            BORDER=2
+            ROUNDING=8
+
+            BLUR=true
+            SHADOW=true
+            ANIMATIONS=true
+            ;;
+
+        *)
+            return
+            ;;
+    esac
+
+
+    # --------------------------------------------------
+    # Hyprland visual profile
+    # --------------------------------------------------
+
+    hyprctl eval "
+        hl.config({
+            general = {
+                gaps_in = ${GAPS_IN},
+                gaps_out = ${GAPS_OUT},
+                border_size = ${BORDER},
+            },
+
+            decoration = {
+                rounding = ${ROUNDING},
+
+                shadow = {
+                    enabled = ${SHADOW},
+                    range = 4,
+                    render_power = 3,
+                },
+
+                blur = {
+                    enabled = ${BLUR},
+                    size = 3,
+                    passes = 1,
+                },
+            },
+
+            animations = {
+                enabled = ${ANIMATIONS},
+            },
+        })
+    " >/dev/null
+
+
+    # --------------------------------------------------
+    # Displays
+    # --------------------------------------------------
+
+    if samsung_connected; then
+
+        # Samsung external monitor on the left
+        hyprctl eval "
+            hl.monitor({
+                output = \"${SAMSUNG}\",
+                mode = \"2560x1440@${SAMSUNG_HZ}\",
+                position = \"0x0\",
+                scale = 1,
+                vrr = 1,
+            })
+        " >/dev/null
+
+
+        if [[ -e "$LID_STATE" ]]; then
+
+            # Lid closed -> disable laptop display
+            hyprctl eval "
+                hl.monitor({
+                    output = \"${LAPTOP}\",
+                    disabled = true,
+                })
+            " >/dev/null
+
+        else
+
+            # Lid open -> laptop refresh rate follows power profile
+            hyprctl eval "
+                hl.monitor({
+                    output = \"${LAPTOP}\",
+                    disabled = false,
+                    mode = \"${LAPTOP_MODE}\",
+                    position = \"auto-right\",
+                    scale = 1,
+                    vrr = 1,
+                })
+            " >/dev/null
+
+        fi
+
+    else
+
+        # Laptop by itself -> refresh rate follows power profile
+        hyprctl eval "
+            hl.monitor({
+                output = \"${LAPTOP}\",
+                disabled = false,
+                mode = \"${LAPTOP_MODE}\",
+                position = \"0x0\",
+                scale = 1,
+                vrr = 1,
+            })
+        " >/dev/null
+
+    fi
+}
+
+
+lid_close() {
+    if samsung_connected; then
+        touch "$LID_STATE"
+        apply_profile
+    else
+        systemctl suspend
+    fi
+}
+
+
+lid_open() {
+    rm -f "$LID_STATE"
+    apply_profile
+}
+
+
+watch_profiles() {
+
+    # Wait for Hyprland to finish discovering monitors
+    for _ in {1..20}; do
+        if hyprctl monitors all 2>/dev/null | grep -q '^Monitor '; then
+            break
+        fi
+
+        sleep 0.25
+    done
+
+    # Give DRM outputs a moment to finish settling
+    sleep 1
+
+    apply_profile
+
+    gdbus monitor \
+        --system \
+        --dest org.freedesktop.UPower.PowerProfiles \
+        --object-path /org/freedesktop/UPower/PowerProfiles |
+    while IFS= read -r event; do
+
+        if [[ "$event" == *"PropertiesChanged"* &&
+              "$event" == *"ActiveProfile"* ]]; then
+            apply_profile
+        fi
+
+    done
+}
+
+
+case "${1:-apply}" in
+
+    watch)
+        watch_profiles
+        ;;
+
+    lid-close)
+        lid_close
+        ;;
+
+    lid-open)
+        lid_open
+        ;;
+
+    apply)
+        apply_profile
+        ;;
+
+esac
