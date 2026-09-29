@@ -1,40 +1,79 @@
 # CachyOS Legion desktop setup
 
-This repo contains the user's Hyprland Lua files, UWSM environment, profile/lid watcher, udev GPU aliases, and fan presets. It targets the Legion 5 15ACH6H with AMD at `05:00.0` and NVIDIA at `01:00.0`.
+This repository rebuilds the user's CachyOS Hyprland/Noctalia desktop on a
+Legion 5 15ACH6H (AMD GPU `05:00.0`, NVIDIA GPU `01:00.0`). The Lua files are
+this desktop overlay. `install.sh` installs the CachyOS desktop base and places
+each tracked file at its appropriate destination.
 
-## Fresh CachyOS install
+## Start on a fresh CachyOS installation
 
-Create a GitHub repository for this folder. On the fresh machine, from a regular user with sudo:
+Use a normal user account with `sudo` access. Install CachyOS with its NVIDIA
+driver first. In a terminal:
 
 ```bash
 sudo pacman -S --needed git
 git clone https://github.com/YOUR_USERNAME/cachyos-dotfiles.git ~/cachyos-dotfiles
 cd ~/cachyos-dotfiles
-bash install.sh
+./install.sh
 ```
 
-One `bash install.sh` run installs CachyOS's `cachyos-hypr-noctalia` base and the application packages, builds `paru` from its AUR PKGBUILD, installs the LazyVim starter into a fresh `~/.config/nvim`, sets locale and power profiles, creates the GPU aliases through udev, and copies the tracked config. It backs up differing existing files. It retains an existing Neovim config rather than replacing it. On first Neovim launch, plugins download; run `:LazyHealth`.
+The installer updates the system, installs separate system, desktop,
+development, research, gaming, video and power package groups, then sets up
+Git/GitHub SSH, paru and LazyVim. GitHub login uses the normal user's `gh`
+session; it never calls `sudo gh`. It prompts for Git identity if absent and
+creates `~/.ssh/id_ed25519` only if no default key exists.
 
-The base package supplies the Hyprland Lua loader and Noctalia defaults. If the user's config is missing, the script copies the CachyOS skeleton entrypoint and Noctalia config before applying the tracked modules. After installation, log out and choose **Hyprland (UWSM)** at the login screen. Check `hyprctl configerrors` and `hyprctl monitors all`.
+It next creates AMD/NVIDIA DRM aliases, configures locale and power profiles,
+installs the NVIDIA power controller, overlays Hyprland/UWSM settings, and
+installs a Firefox launcher directed at the AMD render node. It finds the
+official PIA `.run` installer in `~/Downloads` if one has been downloaded;
+otherwise it prints the official download URL and continues. Package-owned
+system Firefox files are not edited. Existing different user configuration
+files are backed up before replacement.
 
-The supplied bindings use `noctalia msg` calls from the user's original setup. CachyOS updates may change Noctalia's IPC; test the launcher, session and media binds after login, and update the repo's `binds.lua` if necessary. Do not publish secrets, VPN credentials, browser profiles, or SSH keys in the Git repository.
-
-## Fan presets
-
-To add the six original Legion fan presets:
+Log out or reboot, select **Hyprland (UWSM)** and check:
 
 ```bash
-bash install.sh --fans
+hyprctl configerrors
+powerprofilesctl get
+sudo -n /usr/local/sbin/nvidia-power-mode status
+LIBVA_DRIVER_NAME=radeonsi vainfo --display drm \
+  --device /dev/dri/by-path/pci-0000:05:00.0-render
 ```
 
-This installs LenovoLegionLinux's AUR CLI and DKMS packages through `paru` if needed. If the module is not active immediately, reboot and run the same command again. The fan script backs up and restores the active curve after saving the presets.
+Restart Firefox completely after installing. The launcher and UWSM environment
+set `MOZ_DRM_DEVICE` and `LIBVA_DRIVER_NAME` for AMD VA-API. Available AV1
+decode support depends on the AMD GPU and codec; check `vainfo` and Firefox's
+`about:support` to confirm active decoding for the video being played.
+
+Power-saver and balanced apply the RTX 3060's 405–600 MHz graphics-clock range;
+performance resets the clock restriction. This caps boost without forcing a
+constant 600 MHz clock. GameMode does not automatically change the power
+profile: choose performance before a GPU-heavy game if you want unrestricted
+NVIDIA clocks.
+
+## Optional Legion fan presets
+
+```bash
+./install.sh --fans
+```
+
+This installs the LenovoLegionLinux AUR CLI and DKMS packages if needed, then
+saves six fan presets. If the module has not loaded yet, reboot and rerun the
+same command. The script checks the number of fan points, backs up the active
+curve, and restores it after saving the presets. It writes a second PWM curve
+only when the driver exposes one.
 
 ## Updating
 
 ```bash
 cd ~/cachyos-dotfiles
 git pull --ff-only
-bash install.sh
+./install.sh
 ```
 
-`AQ_DRM_DEVICES` expects the persistent `/dev/dri/amd-igpu` and `/dev/dri/nvidia-dgpu` names created by `system/80-legion-drm-aliases.rules`. The AMD Firefox render path is tied to PCI `05:00.0`. The custom monitor profile uses the attached 60 Hz eDP modeline and Samsung refresh rates of 59.95/120/144 Hz. Monitor 3 bindings remain inactive until `MONITOR3` is set to a real output.
+Do not commit private keys, VPN credentials, browser profiles or other secrets.
+This is tailored to the stated GPU PCI addresses and Samsung/eDP monitor modes;
+the installer stops if the GPU addresses differ. The original Lua bindings
+invoke Noctalia IPC commands, so check the launcher and media bindings after
+Noctalia updates.

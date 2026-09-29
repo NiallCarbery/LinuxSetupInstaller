@@ -81,6 +81,12 @@ echo "  $BACKUP"
 
 "$LEGION_CLI" fancurve-write-hw-to-preset "$BACKUP"
 
+# If a later hardware write fails, restore the active curve before exiting.
+restore_on_exit() {
+    "$LEGION_CLI" fancurve-write-preset-to-hw "$BACKUP" || true
+}
+trap restore_on_exit EXIT
+
 # ------------------------------------------------------------
 # Fan curves
 #
@@ -186,20 +192,22 @@ save_profile() {
         fan1="$H/pwm1_auto_point${i}_pwm"
         fan2="$H/pwm2_auto_point${i}_pwm"
 
-        if [[ ! -e "$fan1" || ! -e "$fan2" ]]; then
-            echo "ERROR: Missing PWM control for point $i"
+        if [[ ! -e "$fan1" ]]; then
+            echo "ERROR: Missing primary PWM control for point $i"
             exit 1
         fi
 
         echo "$value" > "$fan1"
-        echo "$value" > "$fan2"
-
-        # Read back actual values accepted by firmware
         actual1=$(cat "$fan1")
-        actual2=$(cat "$fan2")
-
-        printf "Point %d: requested=%3d  fan1=%3d  fan2=%3d\n" \
-            "$i" "$value" "$actual1" "$actual2"
+        if [[ -e "$fan2" ]]; then
+            echo "$value" > "$fan2"
+            actual2=$(cat "$fan2")
+            printf "Point %d: requested=%3d  fan1=%3d  fan2=%3d\n" \
+                "$i" "$value" "$actual1" "$actual2"
+        else
+            printf "Point %d: requested=%3d  shared PWM=%3d\n" \
+                "$i" "$value" "$actual1"
+        fi
     done
 
     echo "Saving hardware curve -> $preset"
@@ -241,6 +249,7 @@ echo
 echo "Restoring original hardware curve..."
 
 "$LEGION_CLI" fancurve-write-preset-to-hw "$BACKUP"
+trap - EXIT
 
 echo
 echo "================================================"

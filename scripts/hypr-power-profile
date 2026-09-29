@@ -68,6 +68,20 @@ apply_profile() {
             ;;
     esac
 
+    # Keep the HDMI-driven NVIDIA GPU within its eco clock range unless
+    # the performance profile is selected. The installer grants only these
+    # fixed commands passwordless access through sudoers.
+    case "$PROFILE" in
+        power-saver|balanced)
+            sudo -n /usr/local/sbin/nvidia-power-mode eco ||
+                echo 'Could not apply NVIDIA eco clocks' >&2
+            ;;
+        performance)
+            sudo -n /usr/local/sbin/nvidia-power-mode performance ||
+                echo 'Could not reset NVIDIA clocks' >&2
+            ;;
+    esac
+
 
     # --------------------------------------------------
     # Hyprland visual profile
